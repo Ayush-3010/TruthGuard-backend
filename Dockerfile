@@ -45,7 +45,7 @@ USER app
 COPY --chown=app:app . .
 
 # Expose port
-EXPOSE 8080
+EXPOSE $PORT
 
 # Run the application
-CMD ["sh", "-c", "uvicorn app:app --host 0.0.0.0 --port ${PORT:-8080}"]
+CMD uvicorn app:app --host 0.0.0.0 --port $PORT
