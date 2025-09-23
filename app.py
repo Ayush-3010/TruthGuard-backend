@@ -37,7 +37,7 @@ device = 0 if torch.cuda.is_available() else -1
 
 # Lazy-loaded models
 models = {
-    "news_classifier": None,  # Changed from text_classifier to news_classifier
+    "text_classifier": None,
     "url_tokenizer": None,
     "url_model": None,
     "image_processor": None,
@@ -45,57 +45,14 @@ models = {
 }
 
 # Request schemas
-class NewsAnalysisRequest(BaseModel):  # Renamed from TextAnalysisRequest
-    text: str  # This will now be news article text
+class TextAnalysisRequest(BaseModel):
+    text: str
 
 class UrlAnalysisRequest(BaseModel):
     url: str
 
-# Helper: format results for news analysis
-def format_news_result(content_type, raw_result, input_text):
-    """Format results specifically for news credibility analysis"""
-    primary_result = raw_result[0] if isinstance(raw_result, list) else raw_result
-    label = primary_result.get("label", "").lower()
-    score = primary_result.get("score", 0.5)
-
-    # DeBERTa model labels: typically "FAKE" or "REAL" / "TRUE"
-    is_fake_news = "fake" in label
-    is_real_news = any(x in label for x in ["real", "true", "reliable"])
-    
-    # Adjust credibility score based on prediction
-    if is_fake_news:
-        credibility_score = 1 - score  # Lower credibility for fake news
-    else:
-        credibility_score = score  # Higher credibility for real news
-
-    return {
-        "type": content_type,
-        "credibilityScore": credibility_score,
-        "analysis": f"The {content_type} has been classified as {primary_result.get('label', 'unknown')} with confidence {score:.2f}. Credibility score: {credibility_score:.2f}",
-        "flags": {
-            "potentialMisinformation": is_fake_news,
-            "needsFactChecking": is_fake_news or credibility_score < 0.7,
-            "biasDetected": credibility_score < 0.6,
-            "manipulatedContent": is_fake_news,
-            "isReliableNews": is_real_news and credibility_score > 0.8,
-        },
-        "sources": [
-            f"DeBERTa News Classifier: {primary_result.get('label', 'N/A')}",
-            "Microsoft DeBERTa v3 Base Fine-tuned Model",
-            "External News Verification Service"
-        ],
-        "details": {
-            "classification": primary_result.get("label", "Unknown"),
-            "confidence": score,
-            "credibilityLevel": "High" if credibility_score > 0.7 else "Medium" if credibility_score > 0.4 else "Low",
-            "keyTerms": input_text.split()[:10] if input_text else [],  # More key terms for news
-            "recommendation": "Verify with multiple sources" if is_fake_news else "Appears credible but always cross-reference"
-        }
-    }
-
-# Helper: format results for other content types
+# Helper: format results
 def format_result(content_type, raw_result, input_text):
-    """Original format function for non-news content"""
     primary_result = raw_result[0] if isinstance(raw_result, list) else raw_result
     label = primary_result.get("label", "").lower()
     score = primary_result.get("score", 0.5)
@@ -127,35 +84,7 @@ def format_result(content_type, raw_result, input_text):
         }
     }
 
-# Fallback mock for news
-def mock_news_analysis(content_type, input_text):
-    """Mock analysis specifically for news content"""
-    mock_score = random.uniform(0.3, 0.9)
-    is_fake = mock_score < 0.5
-    classification = "FAKE" if is_fake else "REAL"
-    
-    return {
-        "type": content_type,
-        "credibilityScore": mock_score,
-        "analysis": f"Analysis failed: News classification model could not be loaded. This is a mock result showing {classification}.",
-        "flags": {
-            "potentialMisinformation": is_fake,
-            "needsFactChecking": is_fake,
-            "biasDetected": random.choice([True, False]),
-            "manipulatedContent": is_fake,
-            "isReliableNews": not is_fake and mock_score > 0.8,
-        },
-        "sources": ["Offline Mode (Mock News Classifier)"],
-        "details": {
-            "classification": classification,
-            "confidence": mock_score,
-            "credibilityLevel": "Mock",
-            "keyTerms": input_text.split()[:10] if input_text else [],
-            "recommendation": "Model unavailable - verify manually"
-        },
-    }
-
-# Original mock function
+# Fallback mock
 def mock_analysis(content_type, input_text):
     mock_score = random.uniform(0.3, 0.9)
     is_misinfo = mock_score < 0.6
@@ -177,30 +106,18 @@ def mock_analysis(content_type, input_text):
         },
     }
 
-# Lazy load models - Updated for DeBERTa news classifier
-async def load_news_model():
-    """Load the DeBERTa-based fake news detection model"""
-    if models["news_classifier"] is None:
+# Lazy load models
+async def load_text_model():
+    if models["text_classifier"] is None:
         try:
-            models["news_classifier"] = pipeline(
+            models["text_classifier"] = pipeline(
                 "text-classification",
-                model="Denyol/FakeNews-deberta-base",  # Updated model
-                device=device,
-                token=HF_TOKEN  # In case authentication is needed
+                model="dhruvpal/fake-news-bert",
+                device=device
             )
-            print("DeBERTa news classification model loaded successfully")
+            print("Text model loaded")
         except Exception as e:
-            print(f"Failed to load DeBERTa news model: {e}")
-            # Fallback to original BERT model if DeBERTa fails
-            try:
-                models["news_classifier"] = pipeline(
-                    "text-classification",
-                    model="dhruvpal/fake-news-bert",
-                    device=device
-                )
-                print("Fallback: Original BERT news model loaded")
-            except Exception as fallback_error:
-                print(f"Fallback also failed: {fallback_error}")
+            print(f"Failed to load text model: {e}")
 
 async def load_url_model():
     if models["url_tokenizer"] is None or models["url_model"] is None:
@@ -223,24 +140,17 @@ async def load_image_model():
         except Exception as e:
             print(f"Failed to load image model: {e}")
 
-# Endpoints - Updated for news analysis
-@app.post("/analyze/news")  # New endpoint specifically for news
-async def analyze_news(request: NewsAnalysisRequest):
-    """Analyze news article for fake news detection using DeBERTa model"""
-    await load_news_model()
-    if not models["news_classifier"]:
-        return {"result": mock_news_analysis("news", request.text)}
+# Endpoints
+@app.post("/analyze/text")
+async def analyze_text(request: TextAnalysisRequest):
+    await load_text_model()
+    if not models["text_classifier"]:
+        return {"result": mock_analysis("text", request.text)}
     try:
-        result = await asyncio.to_thread(models["news_classifier"], request.text)
-        return {"result": format_news_result("news", result, request.text)}
+        result = await asyncio.to_thread(models["text_classifier"], request.text)
+        return {"result": format_result("text", result, request.text)}
     except Exception as e:
-        print(f"News analysis error: {e}")
-        return {"result": mock_news_analysis("news", request.text)}
-
-@app.post("/analyze/text")  # Keep original endpoint for backwards compatibility
-async def analyze_text(request: NewsAnalysisRequest):
-    """Analyze text content - now redirects to news analysis"""
-    return await analyze_news(request)
+        raise HTTPException(status_code=500, detail=f"Text analysis failed: {str(e)}")
 
 @app.post("/analyze/url")
 async def analyze_url(request: UrlAnalysisRequest):
@@ -282,15 +192,3 @@ async def analyze_image(file: UploadFile = File(...)):
 @app.post("/analyze/video")
 async def analyze_video():
     raise HTTPException(status_code=501, detail="Video analysis not yet implemented")
-
-# Health check endpoint
-@app.get("/health")
-async def health_check():
-    return {
-        "status": "healthy",
-        "models_loaded": {
-            "news_classifier": models["news_classifier"] is not None,
-            "url_model": models["url_model"] is not None,
-            "image_model": models["image_model"] is not None,
-        }
-    }
